@@ -5,6 +5,223 @@ final class ViewController: UIViewController {
     private enum Constants {
         static let homeURL = URL(string: "https://chatgpt.com/")!
 
+        // Safari 15.3 and earlier discard every rule inside CSS cascade-layer
+        // blocks. ChatGPT currently puts its theme, base, components and utility
+        // rules inside @layer, which leaves a readable but almost completely
+        // unstyled page on iOS 15.3. This shim runs only when :has() is missing
+        // (it shipped alongside cascade layers in Safari 15.4). It reloads same-
+        // origin stylesheets from the browser cache and converts @layer blocks
+        // into transparent @media all blocks that the older parser understands.
+        static let legacyCSSCompatibilityScript = #"""
+        (function () {
+          if (window.__chatgptLiteLegacyCSSInstalled) return;
+          window.__chatgptLiteLegacyCSSInstalled = true;
+
+          var supportsModernLayers = false;
+          try {
+            supportsModernLayers = !!window.CSS &&
+              typeof window.CSS.supports === 'function' &&
+              window.CSS.supports('selector(:has(*))');
+          } catch (_) {}
+          if (supportsModernLayers) return;
+
+          var patchedLinks = new WeakSet();
+          var transformedCache = Object.create(null);
+          var running = false;
+          var pending = false;
+          var scheduled = false;
+
+          function skipQuotedOrComment(text, index) {
+            var quote = text[index];
+            if (quote === '"' || quote === "'") {
+              index += 1;
+              while (index < text.length) {
+                if (text[index] === '\\') {
+                  index += 2;
+                } else if (text[index] === quote) {
+                  return index + 1;
+                } else {
+                  index += 1;
+                }
+              }
+              return index;
+            }
+            if (text[index] === '/' && text[index + 1] === '*') {
+              var end = text.indexOf('*/', index + 2);
+              return end < 0 ? text.length : end + 2;
+            }
+            return index;
+          }
+
+          function findNextLayer(text, start) {
+            var index = start;
+            while (index < text.length) {
+              var skipped = skipQuotedOrComment(text, index);
+              if (skipped !== index) {
+                index = skipped;
+                continue;
+              }
+              if (text.substr(index, 6) === '@layer') {
+                var next = text[index + 6] || '';
+                if (!/[A-Za-z0-9_-]/.test(next)) return index;
+              }
+              index += 1;
+            }
+            return -1;
+          }
+
+          function findLayerTerminator(text, start) {
+            var index = start;
+            var roundDepth = 0;
+            var squareDepth = 0;
+            while (index < text.length) {
+              var skipped = skipQuotedOrComment(text, index);
+              if (skipped !== index) {
+                index = skipped;
+                continue;
+              }
+              var character = text[index];
+              if (character === '(') roundDepth += 1;
+              else if (character === ')' && roundDepth > 0) roundDepth -= 1;
+              else if (character === '[') squareDepth += 1;
+              else if (character === ']' && squareDepth > 0) squareDepth -= 1;
+              else if (roundDepth === 0 && squareDepth === 0 &&
+                       (character === '{' || character === ';')) {
+                return index;
+              }
+              index += 1;
+            }
+            return -1;
+          }
+
+          function replaceCascadeLayers(cssText) {
+            var output = '';
+            var cursor = 0;
+            while (cursor < cssText.length) {
+              var layerIndex = findNextLayer(cssText, cursor);
+              if (layerIndex < 0) {
+                output += cssText.slice(cursor);
+                break;
+              }
+
+              output += cssText.slice(cursor, layerIndex);
+              var terminator = findLayerTerminator(cssText, layerIndex + 6);
+              if (terminator < 0) {
+                output += cssText.slice(layerIndex);
+                break;
+              }
+
+              if (cssText[terminator] === ';') {
+                // Layer-order declarations have no equivalent on old WebKit.
+                cursor = terminator + 1;
+              } else {
+                output += '@media all {';
+                cursor = terminator + 1;
+              }
+            }
+            return output;
+          }
+
+          function transformedCSS(url) {
+            if (!transformedCache[url]) {
+              transformedCache[url] = fetch(url, {
+                credentials: 'same-origin',
+                cache: 'force-cache'
+              }).then(function (response) {
+                if (!response.ok) throw new Error('Stylesheet HTTP ' + response.status);
+                return response.text();
+              }).then(function (cssText) {
+                if (cssText.indexOf('@layer') < 0) return null;
+                return replaceCascadeLayers(cssText);
+              });
+            }
+            return transformedCache[url];
+          }
+
+          function scheduleRepair() {
+            if (scheduled) return;
+            scheduled = true;
+            setTimeout(function () {
+              scheduled = false;
+              repairStyles();
+            }, 0);
+          }
+
+          function repairStyles() {
+            if (running) {
+              pending = true;
+              return;
+            }
+            if (!document.head) {
+              scheduleRepair();
+              return;
+            }
+
+            var links = Array.prototype.slice.call(
+              document.querySelectorAll('link[rel~="stylesheet"]')
+            ).filter(function (link) {
+              if (patchedLinks.has(link) || !link.href) return false;
+              try {
+                return new URL(link.href, location.href).origin === location.origin;
+              } catch (_) {
+                return false;
+              }
+            });
+
+            if (links.length === 0) return;
+            running = true;
+            links.forEach(function (link) { patchedLinks.add(link); });
+
+            Promise.all(links.map(function (link) {
+              var url = link.href.split('#')[0];
+              return transformedCSS(url).then(function (cssText) {
+                return { link: link, cssText: cssText };
+              }).catch(function () {
+                return { link: link, cssText: null };
+              });
+            })).then(function (results) {
+              results.forEach(function (result) {
+                if (!result.cssText || !result.link.parentNode) return;
+                var style = document.createElement('style');
+                style.setAttribute('data-chatgpt-lite-legacy-css', '');
+                style.textContent = result.cssText;
+                result.link.parentNode.insertBefore(style, result.link.nextSibling);
+              });
+            }).then(function () {
+              if (document.documentElement) {
+                document.documentElement.setAttribute('data-chatgpt-lite-css-ready', '');
+              }
+            }).finally(function () {
+              running = false;
+              if (pending) {
+                pending = false;
+                scheduleRepair();
+              }
+            });
+          }
+
+          window.__chatgptLiteRepairStyles = repairStyles;
+
+          var observer = new MutationObserver(function (mutations) {
+            for (var index = 0; index < mutations.length; index += 1) {
+              if (mutations[index].addedNodes.length > 0) {
+                scheduleRepair();
+                return;
+              }
+            }
+          });
+
+          if (document.documentElement) {
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+          }
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', scheduleRepair, { once: true });
+          } else {
+            scheduleRepair();
+          }
+        })();
+        """#
+
         // Keep authentication redirects in the same persistent WKWebView. Links to
         // unrelated sites are handed to Safari instead.
         static let inAppDomains = [
@@ -56,6 +273,14 @@ final class ViewController: UIViewController {
         preferences.preferredContentMode = .mobile
         configuration.defaultWebpagePreferences = preferences
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+
+        let contentController = WKUserContentController()
+        contentController.addUserScript(WKUserScript(
+            source: Constants.legacyCSSCompatibilityScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        configuration.userContentController = contentController
 
         // WKWebView's engine remains the device's iOS 15 WebKit. Adding Safari's
         // product token helps sites that reject the bare embedded-browser UA without
@@ -303,6 +528,10 @@ extension ViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         activityIndicator.stopAnimating()
         progressView.isHidden = true
+        webView.evaluateJavaScript(
+            "window.__chatgptLiteRepairStyles && window.__chatgptLiteRepairStyles();",
+            completionHandler: nil
+        )
     }
 
     func webView(

@@ -2,6 +2,8 @@
 
 一个基于 `ChatGPTwebV15 v1.0.0` 审计后重建的精简 WKWebView 工程。目标是 iOS 15.3+，仅加载官方 `https://chatgpt.com/`，不使用 OpenAI API，也不接入第三方服务。
 
+当前工程版本：`1.0.1`。该版本为 iOS 15.3/15.3.1 增加 CSS Cascade Layers 兼容转换，修复页面显示为无样式原始 HTML 的问题。
+
 ## 本版范围
 
 - iOS 15.3+，iPhone 与 iPad
@@ -12,6 +14,7 @@
 - 通过 `WKDownload` 接收普通网页附件，并交给系统“文件”选择器保存
 - 处理登录弹窗、新窗口、网页崩溃自动恢复、加载错误与重试
 - 仅追加与 iOS 15 WebKit 相符的 Safari UA 产品标记；不伪装 Safari 17
+- 在 iOS 15.3/15.3.1 上把网页的 `@layer` CSS 转换为旧 WebKit 可解析的规则；iOS 15.4+ 不启用此兼容层
 
 本版没有 Cookie/Session Token 导入、多账号、悬浮按钮、设置页、Obsidian、Apple Watch、语音或 API 功能。
 
