@@ -472,11 +472,17 @@ extension ViewController: WKNavigationDelegate {
 
         if navigationAction.targetFrame == nil {
             if isInAppURL(url) {
-                decisionHandler(.allow, preferences)
+                // ChatGPT and its identity providers frequently use target="_blank"
+                // or window.open() for authentication. WKWebView does not always
+                // create a visible window for those requests on older iOS versions,
+                // so continue the navigation in the requesting web view. Keeping the
+                // whole OAuth redirect chain inside the same persistent WKWebView also
+                // preserves the cookies that are needed when it returns to ChatGPT.
+                webView.load(navigationAction.request)
             } else {
                 openOutsideApp(url)
-                decisionHandler(.cancel, preferences)
             }
+            decisionHandler(.cancel, preferences)
             return
         }
 
@@ -563,6 +569,16 @@ extension ViewController: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         guard navigationAction.targetFrame == nil else { return nil }
+
+        // Fallback for new-window requests that reach the UI delegate before the
+        // navigation delegate can redirect them. Direct web authentication URLs
+        // should stay in the current WKWebView instead of becoming a hidden popup.
+        if let url = navigationAction.request.url,
+           ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+           isInAppURL(url) {
+            webView.load(navigationAction.request)
+            return nil
+        }
 
         popupWebView?.removeFromSuperview()
 

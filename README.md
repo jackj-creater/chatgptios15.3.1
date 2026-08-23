@@ -1,5 +1,11 @@
 # ChatGPT Lite for iOS 15
 
+Current project version: **1.0.2**
+
+Version 1.0.2 keeps ChatGPT, OpenAI and supported identity-provider
+new-window links inside the persistent WKWebView. This fixes login buttons that
+previously appeared to do nothing when an OAuth page requested a new window.
+
 一个基于 `ChatGPTwebV15 v1.0.0` 审计后重建的精简 WKWebView 工程。目标是 iOS 15.3+，仅加载官方 `https://chatgpt.com/`，不使用 OpenAI API，也不接入第三方服务。
 
 当前工程版本：`1.0.1`。该版本为 iOS 15.3/15.3.1 增加 CSS Cascade Layers 兼容转换，修复页面显示为无样式原始 HTML 的问题。
